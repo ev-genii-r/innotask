@@ -129,7 +129,7 @@ jobs:
             -Dspring.datasource.driver-class-name=org.postgresql.Driver \
             -Dspring.redis.host=localhost \
             -Dspring.redis.port=6379 \
-            -Dspring.kafka.bootstrap-servers= \
+            -Dspring.kafka.bootstrap-servers= localhost:9092\
             -Dspring.kafka.enabled=false \
             -Dspring.kafka.listener.auto-startup=false \
             -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration \
@@ -255,7 +255,7 @@ jobs:
             -Dspring.datasource.driver-class-name=org.postgresql.Driver \
             -Dspring.redis.host=localhost \
             -Dspring.redis.port=6379 \
-            -Dspring.kafka.bootstrap-servers= \
+            -Dspring.kafka.bootstrap-servers= localhost:9092\
             -Dspring.kafka.enabled=false \
             -Dspring.kafka.listener.auto-startup=false \
             -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration \
@@ -369,7 +369,7 @@ jobs:
             -Dspring.data.mongodb.database=payment-db \
             -Dspring.redis.host=localhost \
             -Dspring.redis.port=6379 \
-            -Dspring.kafka.bootstrap-servers= \
+            -Dspring.kafka.bootstrap-servers= localhost:9092\
             -Dspring.kafka.enabled=false \
             -Dspring.kafka.listener.auto-startup=false \
             -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration \
