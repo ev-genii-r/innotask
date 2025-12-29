@@ -1,0 +1,98 @@
+name: Microservices CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io  # Или docker.io для Docker Hub
+  REGISTRY_USER: ${{ github.actor }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [
+          'user-service',
+          'order-service',
+          'payment-service',
+          'auth-service',
+          'api-gateway'
+        ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+          cache-dependency-path: ${{ matrix.service }}/pom.xml
+
+      - name: Build and test ${{ matrix.service }}
+        working-directory: ./${{ matrix.service }}
+        run: mvn clean verify
+
+      - name: Extract version
+        id: version
+        working-directory: ./${{ matrix.service }}
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "SERVICE=${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+  docker-build:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [
+          'user-service',
+          'order-service',
+          'payment-service',
+          'auth-service',
+          'api-gateway'
+        ]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Extract version
+        id: version
+        working-directory: ./${{ matrix.service }}
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build JAR
+        working-directory: ./${{ matrix.service }}
+        run: mvn clean package -DskipTests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.service }}
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_USER }}/${{ matrix.service }}:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_USER }}/${{ matrix.service }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
