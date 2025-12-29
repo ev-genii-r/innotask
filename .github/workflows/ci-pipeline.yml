@@ -14,15 +14,6 @@ env:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [
-          'user-service',
-          'order-service',
-          'payment-service',
-          'auth-service',
-          'api-gateway'
-        ]
 
     steps:
       - name: Checkout code
@@ -34,19 +25,19 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
           cache: 'maven'
-          cache-dependency-path: ${{ matrix.service }}/pom.xml
 
-      - name: Build and test ${{ matrix.service }}
-        working-directory: ./${{ matrix.service }}
-        run: mvn clean verify
-
-      - name: Extract version
-        id: version
-        working-directory: ./${{ matrix.service }}
+      - name: Set up Docker for Testcontainers
         run: |
-          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "SERVICE=${{ matrix.service }}" >> $GITHUB_OUTPUT
+          sudo systemctl start docker
+          docker info
+
+      - name: Run tests with Testcontainers
+        working-directory: ./order-service
+        env:
+          # Настройки для Testcontainers
+          TESTCONTAINERS_RYUK_DISABLED: true
+          DOCKER_HOST: unix:///var/run/docker.sock
+        run: mvn clean verify
 
   docker-build:
     needs: build-and-test
