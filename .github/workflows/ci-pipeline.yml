@@ -73,6 +73,7 @@ jobs:
         run: |
           mvn -B clean compile test -f user-service/pom.xml
         env:
+          SPRING_LIQUIBASE_ENABLED: false
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/user-service
           SPRING_DATASOURCE_USERNAME: postgres
           SPRING_DATASOURCE_PASSWORD: kvasik225
@@ -81,7 +82,6 @@ jobs:
           SPRING_REDIS_PORT: 6379
           SPRING_JPA_HIBERNATE_DDL_AUTO: create-drop
           SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-          # Добавляем секрет для JWT если нужно
           JWT_SECRET: test-secret-123
 
   order-service-ci:
@@ -155,6 +155,7 @@ jobs:
         run: |
           mvn -B clean compile test -f order-service/pom.xml
         env:
+          SPRING_LIQUIBASE_ENABLED: false
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5433/order-service
           SPRING_DATASOURCE_USERNAME: postgres
           SPRING_DATASOURCE_PASSWORD: kvasik225
@@ -237,6 +238,7 @@ jobs:
         run: |
           mvn -B clean compile test -f auth-service/pom.xml
         env:
+          SPRING_LIQUIBASE_ENABLED: false
           SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5434/auth-service
           SPRING_DATASOURCE_USERNAME: postgres
           SPRING_DATASOURCE_PASSWORD: kvasik225
