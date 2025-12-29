@@ -1,4 +1,4 @@
-name: Simplified Microservices CI
+name: Microservices CI
 
 on:
   push:
@@ -112,7 +112,7 @@ jobs:
           jwt.secret=test-secret-123
           EOF
 
-      - name: Run only unit tests (skip integration)
+      - name: Run tests
         run: |
           cd payment-service
           mvn -B clean test -Dtest=!*IntegrationTest
