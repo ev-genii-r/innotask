@@ -36,32 +36,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      # Добавляем Kafka для тестов
-      kafka:
-        image: confluentinc/cp-kafka:7.5.0
-        ports:
-          - 9092:9092
-        env:
-          KAFKA_BROKER_ID: 1
-          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-        options: >-
-          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
-          --health-interval 20s
-          --health-timeout 10s
-          --health-retries 10
-
-      zookeeper:
-        image: confluentinc/cp-zookeeper:7.5.0
-        ports:
-          - 2181:2181
-        env:
-          ZOOKEEPER_CLIENT_PORT: 2181
-          ZOOKEEPER_TICK_TIME: 2000
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -73,77 +47,80 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Install tools
+      - name: Install Redis tools and PostgreSQL client
         run: |
           sudo apt-get update
-          sudo apt-get install -y redis-tools postgresql-client netcat
+          sudo apt-get install -y redis-tools postgresql-client
 
-      - name: Wait for services
+      - name: Wait for Redis (проверяем с localhost!)
         run: |
-          echo "Waiting for PostgreSQL..."
-          for i in {1..30}; do
-            if pg_isready -h localhost -p 5432 -U postgres -d user-service; then
-              echo "PostgreSQL is ready!"
-              break
-            fi
-            echo "Waiting for PostgreSQL... ($i/30)"
-            sleep 2
-          done
-          
-          echo "Waiting for Redis..."
+          echo "Waiting for Redis on localhost:6379..."
           for i in {1..30}; do
             if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
-              echo "Redis is ready!"
+              echo "✓ Redis is ready at localhost:6379!"
               break
             fi
             echo "Waiting for Redis... ($i/30)"
             sleep 2
           done
-          
-          echo "Waiting for Zookeeper..."
+
+      - name: Wait for PostgreSQL
+        run: |
+          echo "Waiting for PostgreSQL on localhost:5432..."
           for i in {1..30}; do
-            if nc -z localhost 2181; then
-              echo "Zookeeper is ready!"
+            if pg_isready -h localhost -p 5432 -U postgres -d user-service; then
+              echo "✓ PostgreSQL is ready!"
               break
             fi
-            echo "Waiting for Zookeeper... ($i/30)"
-            sleep 3
-          done
-          
-          echo "Waiting for Kafka..."
-          for i in {1..40}; do
-            if nc -z localhost 9092; then
-              echo "Kafka is ready!"
-              # Даем Kafka время на полную инициализацию
-              sleep 10
-              break
-            fi
-            echo "Waiting for Kafka... ($i/40)"
-            sleep 3
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
           done
 
-      - name: Run tests with Kafka disabled
+      - name: Create test configuration file
+        run: |
+          mkdir -p user-service/src/test/resources
+          cat > user-service/src/test/resources/application-test.properties << 'EOF'
+          # Test configuration
+          spring.liquibase.enabled=false
+          spring.jpa.hibernate.ddl-auto=create-drop
+          
+          # Database
+          spring.datasource.url=jdbc:postgresql://localhost:5432/user-service
+          spring.datasource.username=postgres
+          spring.datasource.password=kvasik225
+          spring.datasource.driver-class-name=org.postgresql.Driver
+          
+          # Redis - ЛОКАЛЬНЫЙ ХОСТ ДЛЯ ТЕСТОВ!
+          spring.redis.host=localhost
+          spring.redis.port=6379
+          
+          # Kafka - полностью отключаем
+          spring.kafka.bootstrap-servers=
+          spring.kafka.enabled=false
+          spring.kafka.listener.auto-startup=false
+          spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+          spring.kafka.listener.missing-topics-fatal=false
+          
+          # JWT
+          jwt.secret=test-secret-123
+          
+          # Logging
+          logging.level.org.springframework=WARN
+          logging.level.com.innowise=DEBUG
+          EOF
+
+      - name: Run unit tests (без интеграционных тестов)
         run: |
           cd user-service
           mvn -B clean test \
-            -Dspring.liquibase.enabled=false \
-            -Dspring.jpa.hibernate.ddl-auto=create-drop \
-            -Dspring.datasource.url=jdbc:postgresql://localhost:5432/user-service \
-            -Dspring.datasource.username=postgres \
-            -Dspring.datasource.password=kvasik225 \
-            -Dspring.datasource.driver-class-name=org.postgresql.Driver \
-            -Dspring.redis.host=localhost \
-            -Dspring.redis.port=6379 \
-            -Dspring.kafka.enabled=false \
-            -Dspring.kafka.listener.auto-startup=false \
-            -Djwt.secret=test-secret-123 \
+            -Dtest=!*IntegrationTest \
             -Dspring.profiles.active=test
 
-      - name: Run tests with Embedded Kafka
-        if: failure()
+      - name: Run integration tests с явными параметрами
         run: |
           cd user-service
-          mvn -B clean test \
+          mvn -B test \
+            -Dtest=*IntegrationTest \
             -Dspring.liquibase.enabled=false \
             -Dspring.jpa.hibernate.ddl-auto=create-drop \
             -Dspring.datasource.url=jdbc:postgresql://localhost:5432/user-service \
@@ -152,11 +129,13 @@ jobs:
             -Dspring.datasource.driver-class-name=org.postgresql.Driver \
             -Dspring.redis.host=localhost \
             -Dspring.redis.port=6379 \
-            -Dspring.kafka.bootstrap-servers=localhost:9092 \
-            -Dspring.kafka.consumer.group-id=test-group \
-            -Dspring.kafka.consumer.auto-offset-reset=earliest \
+            -Dspring.kafka.bootstrap-servers= \
+            -Dspring.kafka.enabled=false \
+            -Dspring.kafka.listener.auto-startup=false \
+            -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration \
+            -Dspring.kafka.listener.missing-topics-fatal=false \
             -Djwt.secret=test-secret-123 \
-            -Dtest=*Test
+            -Dspring.profiles.active=test
 
       - name: Upload test reports
         uses: actions/upload-artifact@v4
@@ -166,7 +145,6 @@ jobs:
           path: user-service/target/surefire-reports/
           retention-days: 7
 
-  # Аналогично для order-service-ci и payment-service-ci
   order-service-ci:
     name: Order Service CI
     runs-on: ubuntu-latest
@@ -207,34 +185,65 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Install tools
+      - name: Install Redis tools and PostgreSQL client
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-tools postgresql-client
 
-      - name: Wait for services
+      - name: Wait for Redis
         run: |
-          echo "Waiting for PostgreSQL..."
-          for i in {1..30}; do
-            if pg_isready -h localhost -p 5433 -U postgres -d order-service; then
-              echo "PostgreSQL is ready!"
-              break
-            fi
-            echo "Waiting for PostgreSQL... ($i/30)"
-            sleep 2
-          done
-          
-          echo "Waiting for Redis..."
+          echo "Waiting for Redis on localhost:6379..."
           for i in {1..30}; do
             if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
-              echo "Redis is ready!"
+              echo "✓ Redis is ready!"
               break
             fi
             echo "Waiting for Redis... ($i/30)"
             sleep 2
           done
 
-      - name: Run tests with Kafka disabled
+      - name: Wait for PostgreSQL
+        run: |
+          echo "Waiting for PostgreSQL on localhost:5433..."
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5433 -U postgres -d order-service; then
+              echo "✓ PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+
+      - name: Create test configuration file
+        run: |
+          mkdir -p order-service/src/test/resources
+          cat > order-service/src/test/resources/application-test.properties << 'EOF'
+          # Test configuration
+          spring.liquibase.enabled=false
+          spring.jpa.hibernate.ddl-auto=create-drop
+          
+          # Database
+          spring.datasource.url=jdbc:postgresql://localhost:5433/order-service
+          spring.datasource.username=postgres
+          spring.datasource.password=kvasik225
+          spring.datasource.driver-class-name=org.postgresql.Driver
+          
+          # Redis
+          spring.redis.host=localhost
+          spring.redis.port=6379
+          
+          # Kafka
+          spring.kafka.bootstrap-servers=
+          spring.kafka.enabled=false
+          spring.kafka.listener.auto-startup=false
+          spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+          spring.kafka.listener.missing-topics-fatal=false
+          
+          # JWT
+          jwt.secret=test-secret-123
+          EOF
+
+      - name: Run tests
         run: |
           cd order-service
           mvn -B clean test \
@@ -246,10 +255,21 @@ jobs:
             -Dspring.datasource.driver-class-name=org.postgresql.Driver \
             -Dspring.redis.host=localhost \
             -Dspring.redis.port=6379 \
+            -Dspring.kafka.bootstrap-servers= \
             -Dspring.kafka.enabled=false \
             -Dspring.kafka.listener.auto-startup=false \
+            -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration \
+            -Dspring.kafka.listener.missing-topics-fatal=false \
             -Djwt.secret=test-secret-123 \
             -Dspring.profiles.active=test
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: order-service-test-results
+          path: order-service/target/surefire-reports/
+          retention-days: 7
 
   payment-service-ci:
     name: Payment Service CI
@@ -287,34 +307,61 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Install tools
+      - name: Install Redis tools
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-tools
 
-      - name: Wait for services
+      - name: Wait for Redis
         run: |
-          echo "Waiting for MongoDB..."
-          for i in {1..30}; do
-            if mongosh --host localhost --port 27017 --eval "db.adminCommand('ping')" 2>/dev/null | grep -q "ok.*1"; then
-              echo "MongoDB is ready!"
-              break
-            fi
-            echo "Waiting for MongoDB... ($i/30)"
-            sleep 2
-          done
-          
-          echo "Waiting for Redis..."
+          echo "Waiting for Redis on localhost:6379..."
           for i in {1..30}; do
             if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
-              echo "Redis is ready!"
+              echo "✓ Redis is ready!"
               break
             fi
             echo "Waiting for Redis... ($i/30)"
             sleep 2
           done
 
-      - name: Run tests with Kafka disabled
+      - name: Wait for MongoDB
+        run: |
+          echo "Waiting for MongoDB on localhost:27017..."
+          for i in {1..30}; do
+            if mongosh --host localhost --port 27017 --eval "db.adminCommand('ping')" 2>/dev/null | grep -q "ok.*1"; then
+              echo "✓ MongoDB is ready!"
+              break
+            fi
+            echo "Waiting for MongoDB... ($i/30)"
+            sleep 2
+          done
+
+      - name: Create test configuration file
+        run: |
+          mkdir -p payment-service/src/test/resources
+          cat > payment-service/src/test/resources/application-test.properties << 'EOF'
+          # Test configuration
+          
+          # MongoDB
+          spring.data.mongodb.uri=mongodb://localhost:27017/payment-db
+          spring.data.mongodb.database=payment-db
+          
+          # Redis
+          spring.redis.host=localhost
+          spring.redis.port=6379
+          
+          # Kafka
+          spring.kafka.bootstrap-servers=
+          spring.kafka.enabled=false
+          spring.kafka.listener.auto-startup=false
+          spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+          spring.kafka.listener.missing-topics-fatal=false
+          
+          # JWT
+          jwt.secret=test-secret-123
+          EOF
+
+      - name: Run tests
         run: |
           cd payment-service
           mvn -B clean test \
@@ -322,10 +369,21 @@ jobs:
             -Dspring.data.mongodb.database=payment-db \
             -Dspring.redis.host=localhost \
             -Dspring.redis.port=6379 \
+            -Dspring.kafka.bootstrap-servers= \
             -Dspring.kafka.enabled=false \
             -Dspring.kafka.listener.auto-startup=false \
+            -Dspring.autoconfigure.exclude=org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration \
+            -Dspring.kafka.listener.missing-topics-fatal=false \
             -Djwt.secret=test-secret-123 \
             -Dspring.profiles.active=test
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: payment-service-test-results
+          path: payment-service/target/surefire-reports/
+          retention-days: 7
 
   docker-build:
     name: Build Docker Images
@@ -351,27 +409,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push User Service
-        uses: docker/build-push-action@v5
-        with:
-          context: ./user-service
-          file: ./user-service/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ghcr.io/${{ github.repository }}/user-service:latest
-            ghcr.io/${{ github.repository }}/user-service:${{ github.sha }}
-          build-args: |
-            DB_DRIVER=org.postgresql.Driver
-            DB_URL=jdbc:postgresql://user-db:5432/user-service
-            DB_USERNAME=postgres
-            DB_PASSWORD=kvasik225
-            REDIS_HOST=redis
-            REDIS_PORT=6379
-            KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-            JWT_SECRET=${{ secrets.JWT_SECRET }}
-            LIQUIBASE_ENABLED=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build and push Docker images
+        run: |
+          # User Service
+          docker build -t ghcr.io/${{ github.repository }}/user-service:latest ./user-service
+          docker push ghcr.io/${{ github.repository }}/user-service:latest
+          
+          # Order Service
+          docker build -t ghcr.io/${{ github.repository }}/order-service:latest ./order-service
+          docker push ghcr.io/${{ github.repository }}/order-service:latest
+          
+          # Payment Service
+          docker build -t ghcr.io/${{ github.repository }}/payment-service:latest ./payment-service
+          docker push ghcr.io/${{ github.repository }}/payment-service:latest
 
   pipeline-summary:
     name: Pipeline Summary
