@@ -7,7 +7,7 @@ on:
     branches: [ main, develop, master ]
 
 jobs:
-  user-service:
+  user-service-ci:
     name: User Service CI
     runs-on: ubuntu-latest
 
@@ -16,6 +16,25 @@ jobs:
         image: redis:7-alpine
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres-user:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: user-service
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: kvasik225
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -28,20 +47,44 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build
-        run: mvn -B compile -f user-service/pom.xml
-
-      - name: Run Tests
+      - name: Wait for services
         run: |
-          mvn -B test -f user-service/pom.xml
+          echo "Waiting for PostgreSQL..."
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Waiting for Redis..."
+          for i in {1..30}; do
+            if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
+              echo "Redis is ready!"
+              break
+            fi
+            echo "Waiting for Redis... ($i/30)"
+            sleep 2
+          done
+
+      - name: Build and Test User Service
+        run: |
+          mvn -B clean compile test -f user-service/pom.xml
         env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/user-service
+          SPRING_DATASOURCE_USERNAME: postgres
+          SPRING_DATASOURCE_PASSWORD: kvasik225
+          SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
           SPRING_REDIS_HOST: localhost
           SPRING_REDIS_PORT: 6379
+          SPRING_JPA_HIBERNATE_DDL_AUTO: create-drop
+          SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+          # Добавляем секрет для JWT если нужно
+          JWT_SECRET: test-secret-123
 
-      - name: Package
-        run: mvn -B package -f user-service/pom.xml -DskipTests
-
-  order-service:
+  order-service-ci:
     name: Order Service CI
     runs-on: ubuntu-latest
 
@@ -50,6 +93,25 @@ jobs:
         image: redis:7-alpine
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres-order:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: order-service
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: kvasik225
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -62,20 +124,130 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build
-        run: mvn -B compile -f order-service/pom.xml
-
-      - name: Run Tests
+      - name: Install PostgreSQL client
         run: |
-          mvn -B test -f order-service/pom.xml
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client redis-tools
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5433 -U postgres; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Waiting for Redis..."
+          for i in {1..30}; do
+            if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
+              echo "Redis is ready!"
+              break
+            fi
+            echo "Waiting for Redis... ($i/30)"
+            sleep 2
+          done
+
+      - name: Build and Test Order Service
+        run: |
+          mvn -B clean compile test -f order-service/pom.xml
         env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5433/order-service
+          SPRING_DATASOURCE_USERNAME: postgres
+          SPRING_DATASOURCE_PASSWORD: kvasik225
+          SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
           SPRING_REDIS_HOST: localhost
           SPRING_REDIS_PORT: 6379
+          SPRING_JPA_HIBERNATE_DDL_AUTO: create-drop
+          SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+          JWT_SECRET: test-secret-123
 
-      - name: Package
-        run: mvn -B package -f order-service/pom.xml -DskipTests
+  auth-service-ci:
+    name: Auth Service CI
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.modified, 'auth-service/') || github.event_name == 'pull_request'
 
-  payment-service:
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres-auth:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: auth-service
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: kvasik225
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client redis-tools
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for PostgreSQL..."
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5434 -U postgres; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Waiting for Redis..."
+          for i in {1..30}; do
+            if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
+              echo "Redis is ready!"
+              break
+            fi
+            echo "Waiting for Redis... ($i/30)"
+            sleep 2
+          done
+
+      - name: Build and Test Auth Service
+        run: |
+          mvn -B clean compile test -f auth-service/pom.xml
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5434/auth-service
+          SPRING_DATASOURCE_USERNAME: postgres
+          SPRING_DATASOURCE_PASSWORD: kvasik225
+          SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+          SPRING_REDIS_HOST: localhost
+          SPRING_REDIS_PORT: 6379
+          SPRING_JPA_HIBERNATE_DDL_AUTO: create-drop
+          SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+          JWT_SECRET: test-secret-123
+
+  payment-service-ci:
     name: Payment Service CI
     runs-on: ubuntu-latest
 
@@ -84,6 +256,21 @@ jobs:
         image: redis:7-alpine
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -96,23 +283,47 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build
-        run: mvn -B compile -f payment-service/pom.xml
-
-      - name: Run Tests
+      - name: Install Redis tools
         run: |
-          mvn -B test -f payment-service/pom.xml
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for MongoDB..."
+          for i in {1..30}; do
+            if mongosh --host localhost --port 27017 --eval "db.adminCommand('ping')" 2>/dev/null | grep -q "ok.*1"; then
+              echo "MongoDB is ready!"
+              break
+            fi
+            echo "Waiting for MongoDB... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Waiting for Redis..."
+          for i in {1..30}; do
+            if redis-cli -h localhost -p 6379 ping | grep -q PONG; then
+              echo "Redis is ready!"
+              break
+            fi
+            echo "Waiting for Redis... ($i/30)"
+            sleep 2
+          done
+
+      - name: Build and Test Payment Service
+        run: |
+          mvn -B clean compile test -f payment-service/pom.xml
         env:
+          SPRING_DATA_MONGODB_URI: mongodb://localhost:27017/payment-db
+          SPRING_DATA_MONGODB_DATABASE: payment-db
           SPRING_REDIS_HOST: localhost
           SPRING_REDIS_PORT: 6379
+          JWT_SECRET: test-secret-123
 
-      - name: Package
-        run: mvn -B package -f payment-service/pom.xml -DskipTests
-
-  docker-build-all:
+  docker-build:
     name: Build Docker Images
     runs-on: ubuntu-latest
-    needs: [user-service, order-service, payment-service]
+    needs: [user-service-ci, order-service-ci, payment-service-ci]
     if: always()
 
     permissions:
@@ -127,39 +338,111 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker Images
+      - name: Build and Push User Service
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./user-service
           file: ./user-service/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ghcr.io/${{ github.repository }}/user-service:latest
+          tags: |
+            ghcr.io/${{ github.repository }}/user-service:latest
+            ghcr.io/${{ github.repository }}/user-service:${{ github.sha }}
+          build-args: |
+            DB_DRIVER=org.postgresql.Driver
+            DB_URL=jdbc:postgresql://user-db:5432/user-service
+            DB_USERNAME=postgres
+            DB_PASSWORD=kvasik225
+            REDIS_HOST=redis
+            REDIS_PORT=6379
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Build and Push Order Service
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./order-service
           file: ./order-service/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ghcr.io/${{ github.repository }}/order-service:latest
+          tags: |
+            ghcr.io/${{ github.repository }}/order-service:latest
+            ghcr.io/${{ github.repository }}/order-service:${{ github.sha }}
+          build-args: |
+            DB_DRIVER=org.postgresql.Driver
+            DB_URL=jdbc:postgresql://order-db:5433/order-service
+            DB_USERNAME=postgres
+            DB_PASSWORD=kvasik225
+            REDIS_HOST=redis
+            REDIS_PORT=6379
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push Auth Service (если есть)
+        if: contains(github.event.head_commit.modified, 'auth-service/') || github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./auth-service
+          file: ./auth-service/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/${{ github.repository }}/auth-service:latest
+            ghcr.io/${{ github.repository }}/auth-service:${{ github.sha }}
+          build-args: |
+            DB_DRIVER=org.postgresql.Driver
+            DB_URL=jdbc:postgresql://auth-db:5434/auth-service
+            DB_USERNAME=postgres
+            DB_PASSWORD=kvasik225
+            REDIS_HOST=redis
+            REDIS_PORT=6379
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Build and Push Payment Service
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./payment-service
           file: ./payment-service/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ghcr.io/${{ github.repository }}/payment-service:latest
+          tags: |
+            ghcr.io/${{ github.repository }}/payment-service:latest
+            ghcr.io/${{ github.repository }}/payment-service:${{ github.sha }}
+          build-args: |
+            MONGODB_URI=mongodb://payment-db:27017/payment-db
+            MONGODB_DATABASE=payment-db
+            REDIS_HOST=redis
+            REDIS_PORT=6379
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  pipeline-summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [user-service-ci, order-service-ci, payment-service-ci]
+    if: always()
+
+    steps:
+      - name: Display Pipeline Results
+        run: |
+          echo "=== CI Pipeline Results ==="
+          echo "User Service: ${{ needs.user-service-ci.result }}"
+          echo "Order Service: ${{ needs.order-service-ci.result }}"
+          echo "Payment Service: ${{ needs.payment-service-ci.result }}"
+          echo "=========================="
+          
+          if [[ "${{ needs.user-service-ci.result }}" == "success" && 
+                "${{ needs.order-service-ci.result }}" == "success" && 
+                "${{ needs.payment-service-ci.result }}" == "success" ]]; then
+            echo "✅ All services passed!"
+          else
+            echo "❌ Some services failed"
+            exit 1
+          fi
